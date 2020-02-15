@@ -11,7 +11,6 @@
 #import <ctype.h>
 #import <libkern/OSAtomic.h>
 #import <objc/message.h>
-#import <os/lock.h>
 #import <pthread.h>
 #import <stdio.h>
 #import <stdlib.h>
@@ -746,11 +745,16 @@ NSMethodSignature *ext_globalMethodSignatureForSelector (SEL aSelector) {
   
     // reads and writes need to be atomic, but will be ridiculously fast,
     // so we can stay in userland for locks, and keep the speed.
-    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
-    
-    os_unfair_lock_lock(&lock);
+	
+	static dispatch_semaphore_t semaphore = nil;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		semaphore = dispatch_semaphore_create(1);
+	});
+	
+	dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
     methodDesc = methodDescriptionCache[hash];
-    os_unfair_lock_unlock(&lock);
+	dispatch_semaphore_signal(semaphore);
 
     // cache hit? check the selector to insure we aren't colliding
     if (methodDesc.name == aSelector) {
@@ -804,9 +808,9 @@ NSMethodSignature *ext_globalMethodSignatureForSelector (SEL aSelector) {
 
     if (methodDesc.name) {
         // if not locked, cache this value, but don't wait around
-        if (os_unfair_lock_trylock(&lock)) {
+        if (dispatch_semaphore_wait(semaphore, DISPATCH_TIME_NOW) == 0) {
             methodDescriptionCache[hash] = methodDesc;
-            os_unfair_lock_unlock(&lock);
+            dispatch_semaphore_signal(semaphore);
         }
 
         // NB: there are some esoteric system type encodings that cause -signatureWithObjCTypes: to fail,
